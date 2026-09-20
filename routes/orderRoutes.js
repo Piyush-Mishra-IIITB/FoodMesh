@@ -7,6 +7,7 @@ const {
   updateOrderStatus,
   assignDeliveryPartner,
   getDeliveryOrders,
+  getRestaurantOrders,
 } = require("../controllers/orderController");
 
 const authMiddleware = require("../middleware/authMiddleware");
@@ -20,6 +21,22 @@ router.post("/", authMiddleware, roleMiddleware("customer"), createOrder);
 // Customer gets their orders
 router.get("/my", authMiddleware, roleMiddleware("customer"), getMyOrders);
 
+// Restaurant owner's orders
+router.get(
+  "/restaurant",
+  authMiddleware,
+  roleMiddleware("restaurant_owner"),
+  getRestaurantOrders,
+);
+
+// Delivery partner's orders
+router.get(
+  "/delivery",
+  authMiddleware,
+  roleMiddleware("delivery_partner"),
+  getDeliveryOrders,
+);
+
 // Get single order
 router.get("/:id", authMiddleware, getOrderById);
 
@@ -30,7 +47,8 @@ router.patch(
   roleMiddleware("customer", "restaurant_owner", "delivery_partner"),
   updateOrderStatus,
 );
-// Assign delivery partner to order
+
+// Assign delivery partner
 router.patch(
   "/:id/assign",
   authMiddleware,
@@ -38,11 +56,4 @@ router.patch(
   assignDeliveryPartner,
 );
 
-// Get delivery partner's orders
-router.get(
-  "/delivery",
-  authMiddleware,
-  roleMiddleware("delivery_partner"),
-  getDeliveryOrders,
-);
 module.exports = router;

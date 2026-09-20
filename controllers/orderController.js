@@ -3,6 +3,7 @@ const MenuItem = require("../models/menuItemModel");
 const Restaurant = require("../models/restaurantModel");
 const DeliveryPartner = require("../models/deliveryPartnerModel");
 const findNearestPartner = require("../utils/findNearestPartner");
+
 // =====================================================
 // CREATE ORDER
 // Customer creates an order
@@ -168,8 +169,8 @@ const getOrderById = async (req, res) => {
       }
     }
 
-    // Restaurant owner can only see orders
-    // belonging to their restaurant
+    // Restaurant owner can only see
+    // orders belonging to their restaurant
     if (req.user.role === "restaurant_owner") {
       const restaurant = await Restaurant.findById(order.restaurant._id);
 
@@ -232,6 +233,22 @@ const updateOrderStatus = async (req, res) => {
     const currentStatus = order.status;
 
     // =================================================
+    // ONLINE PAYMENT CHECK
+    // =================================================
+
+    if (
+      req.user.role === "restaurant_owner" &&
+      currentStatus === "PLACED" &&
+      status === "CONFIRMED" &&
+      order.paymentMethod === "ONLINE" &&
+      order.paymentStatus !== "PAID"
+    ) {
+      return res.status(400).json({
+        message: "Online payment is pending",
+      });
+    }
+
+    // =================================================
     // RESTAURANT OWNER
     // =================================================
 
@@ -268,12 +285,11 @@ const updateOrderStatus = async (req, res) => {
         });
       }
 
-      // IMPORTANT:
       // order.deliveryPartner = DeliveryPartner._id
       // req.user.userId = User._id
       //
-      // So we must find the DeliveryPartner
-      // whose user is the logged-in user.
+      // Find the delivery partner
+      // belonging to the logged-in user.
 
       const deliveryPartner = await DeliveryPartner.findOne({
         _id: order.deliveryPartner,
@@ -297,17 +313,6 @@ const updateOrderStatus = async (req, res) => {
           message: `Cannot change order from ${currentStatus} to ${status}`,
         });
       }
-
-      // When delivery is completed,
-      // partner becomes available again.
-
-      if (status === "DELIVERED") {
-        deliveryPartner.isAvailable = true;
-
-        deliveryPartner.totalDeliveries += 1;
-
-        await deliveryPartner.save();
-      }
     }
 
     // =================================================
@@ -315,7 +320,8 @@ const updateOrderStatus = async (req, res) => {
     // =================================================
 
     if (req.user.role === "customer") {
-      // Customer can only modify their own order
+      // Customer can only modify
+      // their own order
       if (order.customer.toString() !== req.user.userId) {
         return res.status(403).json({
           message: "You are not allowed to update this order",
@@ -324,12 +330,92 @@ const updateOrderStatus = async (req, res) => {
 
       // Customer can only cancel
       // an order that is still PLACED
+      if (status !== "CANCELLED") {
+        return res.status(400).json({
+          message: "Customer can only cancel an order",
+        });
+      }
 
-      if (status !== "CANCELLED" || currentStatus !== "PLACED") {
+      // Order can only be cancelled before
+      // restaurant confirmation
+      if (currentStatus !== "PLACED") {
         return res.status(400).json({
           message: "Order cannot be cancelled at this stage",
         });
       }
+
+      // =================================================
+      // ONLINE PAYMENT REFUND
+      // =================================================
+
+      if (order.paymentMethod === "ONLINE" && order.paymentStatus === "PAID") {
+        // Mock refund
+        order.paymentStatus = "REFUNDED";
+      }
+
+      // =================================================
+      // COD CANCELLATION
+      // =================================================
+
+      // If COD and payment is still PENDING,
+      // nothing needs to be changed in paymentStatus.
+
+      order.status = "CANCELLED";
+
+      await order.save();
+
+      return res.status(200).json({
+        message: "Order cancelled successfully",
+        order,
+      });
+    }
+
+    // =================================================
+    // AUTOMATIC DELIVERY PARTNER ASSIGNMENT
+    // PREPARING → READY
+    // =================================================
+
+    if (
+      req.user.role === "restaurant_owner" &&
+      currentStatus === "PREPARING" &&
+      status === "READY"
+    ) {
+      const restaurant = await Restaurant.findById(order.restaurant);
+
+      if (!restaurant) {
+        return res.status(404).json({
+          message: "Restaurant not found",
+        });
+      }
+
+      const { latitude, longitude } = restaurant.address;
+
+      if (latitude === undefined || longitude === undefined) {
+        return res.status(400).json({
+          message: "Restaurant location is not available",
+        });
+      }
+
+      const result = await findNearestPartner(latitude, longitude);
+
+      if (!result) {
+        return res.status(404).json({
+          message: "No available delivery partner found",
+        });
+      }
+
+      const { partner, distance } = result;
+
+      order.deliveryPartner = partner._id;
+
+      // Partner is now busy
+      partner.isAvailable = false;
+
+      await partner.save();
+
+      console.log(
+        `Delivery partner ${partner._id} assigned at ${distance.toFixed(2)} km`,
+      );
     }
 
     // =================================================
@@ -339,6 +425,30 @@ const updateOrderStatus = async (req, res) => {
     order.status = status;
 
     await order.save();
+
+    // =================================================
+    // DELIVERY COMPLETED
+    // Make partner available again
+    // =================================================
+
+    if (req.user.role === "delivery_partner" && status === "DELIVERED") {
+      const deliveryPartner = await DeliveryPartner.findOne({
+        _id: order.deliveryPartner,
+        user: req.user.userId,
+      });
+
+      if (deliveryPartner) {
+        deliveryPartner.isAvailable = true;
+
+        deliveryPartner.totalDeliveries += 1;
+
+        await deliveryPartner.save();
+      }
+    }
+
+    // =================================================
+    // RESPONSE
+    // =================================================
 
     res.status(200).json({
       message: "Order status updated successfully",
@@ -357,6 +467,7 @@ const updateOrderStatus = async (req, res) => {
 // ASSIGN DELIVERY PARTNER
 // Restaurant owner / Admin
 // =====================================================
+
 const assignDeliveryPartner = async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
@@ -440,6 +551,7 @@ const assignDeliveryPartner = async (req, res) => {
     });
   }
 };
+
 // =====================================================
 // GET DELIVERY PARTNER ORDERS
 // =====================================================
@@ -468,7 +580,49 @@ const getDeliveryOrders = async (req, res) => {
     })
       .populate("customer", "name phone")
       .populate("restaurant", "name phone address")
-      .sort({ createdAt: -1 });
+      .sort({
+        createdAt: -1,
+      });
+
+    res.status(200).json({
+      orders,
+    });
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      message: "Server error",
+    });
+  }
+};
+
+// =====================================================
+// GET RESTAURANT ORDERS
+// Restaurant owner gets orders for their restaurant
+// =====================================================
+
+const getRestaurantOrders = async (req, res) => {
+  try {
+    // Find restaurant owned by logged-in user
+    const restaurant = await Restaurant.findOne({
+      owner: req.user.userId,
+    });
+
+    if (!restaurant) {
+      return res.status(404).json({
+        message: "Restaurant not found",
+      });
+    }
+
+    const orders = await Order.find({
+      restaurant: restaurant._id,
+    })
+      .populate("customer", "name phone")
+      .populate("deliveryPartner")
+      .populate("items.menuItem")
+      .sort({
+        createdAt: -1,
+      });
 
     res.status(200).json({
       orders,
@@ -493,4 +647,5 @@ module.exports = {
   updateOrderStatus,
   assignDeliveryPartner,
   getDeliveryOrders,
+  getRestaurantOrders,
 };
