@@ -49,6 +49,8 @@ const menuItemSchema = new mongoose.Schema(
     timestamps: true,
   },
 );
+// MongoDB index
+menuItemSchema.index({ restaurant: 1 });
 
 const MenuItem = mongoose.model("MenuItem", menuItemSchema);
 

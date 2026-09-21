@@ -80,6 +80,7 @@ const restaurantSchema = new mongoose.Schema(
     timestamps: true,
   },
 );
+restaurantSchema.index({ owner: 1 });
 
 const Restaurant = mongoose.model("Restaurant", restaurantSchema);
 

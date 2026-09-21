@@ -64,6 +64,11 @@ const deliveryPartnerSchema = new mongoose.Schema(
     timestamps: true,
   },
 );
+// MongoDB index
+deliveryPartnerSchema.index({
+  isOnline: 1,
+  isAvailable: 1,
+});
 
 const DeliveryPartner = mongoose.model(
   "DeliveryPartner",

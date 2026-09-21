@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Order = require("../models/orderModel");
 const MenuItem = require("../models/menuItemModel");
 const Restaurant = require("../models/restaurantModel");
@@ -24,7 +25,12 @@ const createOrder = async (req, res) => {
         message: "Please provide all required fields",
       });
     }
-
+    // Check restaurant ID
+    if (!mongoose.Types.ObjectId.isValid(restaurant)) {
+      return res.status(400).json({
+        message: "Invalid restaurant ID",
+      });
+    }
     // Check restaurant
     const restaurantExists = await Restaurant.findById(restaurant);
 
@@ -52,12 +58,16 @@ const createOrder = async (req, res) => {
         });
       }
 
-      if (item.quantity < 1) {
+      if (item.quantity <= 0) {
         return res.status(400).json({
           message: "Invalid quantity",
         });
       }
-
+      if (!mongoose.Types.ObjectId.isValid(item.menuItem)) {
+        return res.status(400).json({
+          message: "Invalid menu item ID",
+        });
+      }
       const menuItem = await MenuItem.findById(item.menuItem);
 
       if (!menuItem) {
@@ -148,6 +158,12 @@ const getMyOrders = async (req, res) => {
 
 const getOrderById = async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({
+        message: "Invalid order ID",
+      });
+    }
+
     const order = await Order.findById(req.params.id)
       .populate("customer", "name email phone")
       .populate("restaurant", "name")
@@ -214,6 +230,12 @@ const getOrderById = async (req, res) => {
 
 const updateOrderStatus = async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({
+        message: "Invalid order ID",
+      });
+    }
+
     const { status } = req.body;
 
     if (!status) {
@@ -470,6 +492,11 @@ const updateOrderStatus = async (req, res) => {
 
 const assignDeliveryPartner = async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({
+        message: "Invalid order ID",
+      });
+    }
     const order = await Order.findById(req.params.id);
 
     if (!order) {
@@ -483,7 +510,11 @@ const assignDeliveryPartner = async (req, res) => {
         message: "Order is not ready for delivery",
       });
     }
-
+    if (order.deliveryPartner) {
+      return res.status(400).json({
+        message: "Delivery partner is already assigned",
+      });
+    }
     const restaurant = await Restaurant.findById(order.restaurant);
 
     if (!restaurant) {
