@@ -1,5 +1,6 @@
 require("dotenv").config();
 
+const errorHandler = require("./middleware/errorMiddleware");
 const express = require("express");
 const connectDB = require("./config/db");
 
@@ -23,6 +24,9 @@ app.use("/api/menu", menuRoutes);
 app.use("/api/delivery", deliveryRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/payments", paymentRoutes);
+
+// Error handling middleware
+app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
 
