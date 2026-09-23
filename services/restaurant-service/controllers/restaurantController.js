@@ -155,10 +155,39 @@ const deleteRestaurant = async (req, res) => {
     });
   }
 };
+// Internal endpoint for Order Service
+const getRestaurantByOwner = async (req, res) => {
+  try {
+    const restaurant = await Restaurant.findOne({
+      owner: req.params.ownerId,
+    });
+
+    if (!restaurant) {
+      return res.status(404).json({
+        message: "Restaurant not found",
+      });
+    }
+
+    res.status(200).json({
+      restaurant: {
+        id: restaurant._id,
+        name: restaurant.name,
+        owner: restaurant.owner,
+      },
+    });
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      message: "Server error",
+    });
+  }
+};
 module.exports = {
   createRestaurant,
   getAllRestaurants,
   getRestaurantById,
   updateRestaurant,
   deleteRestaurant,
+  getRestaurantByOwner,
 };

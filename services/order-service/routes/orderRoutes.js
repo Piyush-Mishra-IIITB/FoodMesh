@@ -8,6 +8,8 @@ const {
   assignDeliveryPartner,
   getDeliveryOrders,
   getRestaurantOrders,
+  updatePaymentStatus,
+  getPaymentStatus,
 } = require("../controllers/orderController");
 
 const authMiddleware = require("../middleware/authMiddleware");
@@ -36,7 +38,8 @@ router.get(
   roleMiddleware("delivery_partner"),
   getDeliveryOrders,
 );
-
+router.patch("/internal/payment-status", updatePaymentStatus);
+router.get("/internal/payment/:orderId", getPaymentStatus);
 // Get single order
 router.get("/:id", authMiddleware, getOrderById);
 

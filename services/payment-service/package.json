@@ -1,5 +1,5 @@
 {
-  "name": "order-service",
+  "name": "payment-service",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
@@ -12,11 +12,9 @@
   "type": "commonjs",
   "dependencies": {
     "axios": "^1.20.0",
-    "cookie-parser": "^1.4.7",
-    "dotenv": "^18.0.2",
+    "dotenv": "^18.0.3",
     "express": "^5.2.1",
-    "jsonwebtoken": "^9.0.3",
-    "mongoose": "^9.10.1"
+    "mongoose": "^9.10.2"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"

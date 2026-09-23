@@ -6,6 +6,7 @@ const {
   getMenuItem,
   updateMenuItem,
   deleteMenuItem,
+  validateOrderItems,
 } = require("../controllers/menuController");
 
 const authMiddleware = require("../middleware/authMiddleware");
@@ -23,7 +24,8 @@ router.post(
 
 // Get restaurant menu
 router.get("/restaurant/:restaurantId", getRestaurantMenu);
-
+// Internal endpoint for Order Service
+router.post("/internal/validate", validateOrderItems);
 // Get single menu item
 router.get("/:id", getMenuItem);
 

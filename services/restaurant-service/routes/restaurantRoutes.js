@@ -6,6 +6,7 @@ const {
   getRestaurantById,
   updateRestaurant,
   deleteRestaurant,
+  getRestaurantByOwner,
 } = require("../controllers/restaurantController");
 
 const authMiddleware = require("../middleware/authMiddleware");
@@ -19,6 +20,7 @@ router.post(
   createRestaurant,
 );
 router.get("/", getAllRestaurants);
+router.get("/owner/:ownerId", getRestaurantByOwner);
 router.get("/:id", getRestaurantById);
 router.put(
   "/:id",

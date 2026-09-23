@@ -216,11 +216,94 @@ const deleteMenuItem = async (req, res) => {
     });
   }
 };
+// Internal endpoint for Order Service
+const validateOrderItems = async (req, res) => {
+  try {
+    const { restaurantId, items } = req.body;
 
+    if (!restaurantId || !items || items.length === 0) {
+      return res.status(400).json({
+        message: "Restaurant ID and items are required",
+      });
+    }
+
+    const restaurant = await Restaurant.findById(restaurantId);
+
+    if (!restaurant) {
+      return res.status(404).json({
+        message: "Restaurant not found",
+      });
+    }
+
+    const validatedItems = [];
+    let totalAmount = 0;
+
+    for (const item of items) {
+      if (!item.menuItem || !item.quantity) {
+        return res.status(400).json({
+          message: "Menu item and quantity are required",
+        });
+      }
+
+      if (item.quantity <= 0) {
+        return res.status(400).json({
+          message: "Invalid quantity",
+        });
+      }
+
+      const menuItem = await MenuItem.findById(item.menuItem);
+
+      if (!menuItem) {
+        return res.status(404).json({
+          message: `Menu item ${item.menuItem} not found`,
+        });
+      }
+
+      if (menuItem.restaurant.toString() !== restaurantId) {
+        return res.status(400).json({
+          message: "Menu item does not belong to this restaurant",
+        });
+      }
+
+      if (!menuItem.isAvailable) {
+        return res.status(400).json({
+          message: `${menuItem.name} is currently unavailable`,
+        });
+      }
+
+      const itemTotal = menuItem.price * item.quantity;
+
+      totalAmount += itemTotal;
+
+      validatedItems.push({
+        menuItem: menuItem._id,
+        name: menuItem.name,
+        quantity: item.quantity,
+        price: menuItem.price,
+      });
+    }
+
+    res.status(200).json({
+      restaurant: {
+        id: restaurant._id,
+        name: restaurant.name,
+      },
+      items: validatedItems,
+      totalAmount,
+    });
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      message: "Server error",
+    });
+  }
+};
 module.exports = {
   createMenuItem,
   getRestaurantMenu,
   getMenuItem,
   updateMenuItem,
   deleteMenuItem,
+  validateOrderItems,
 };
