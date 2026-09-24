@@ -1,4 +1,5 @@
 const Restaurant = require("../models/restaurantModel");
+const { redisClient } = require("../config/redis");
 
 const createRestaurant = async (req, res) => {
   try {
@@ -27,7 +28,7 @@ const createRestaurant = async (req, res) => {
       address,
       cuisine,
     });
-
+    await redisClient.del("restaurants:all");
     res.status(201).json({
       message: "Restaurant created successfully",
       restaurant,
@@ -42,12 +43,33 @@ const createRestaurant = async (req, res) => {
 };
 const getAllRestaurants = async (req, res) => {
   try {
+    const cacheKey = "restaurants:all";
+
+    // Check Redis first
+    const cachedRestaurants = await redisClient.get(cacheKey);
+
+    if (cachedRestaurants) {
+      console.log("Redis Cache HIT");
+
+      return res.status(200).json(JSON.parse(cachedRestaurants));
+    }
+
+    console.log("Redis Cache MISS");
+
+    // If not in Redis, get from MongoDB
     const restaurants = await Restaurant.find();
 
-    res.status(200).json({
+    const response = {
       count: restaurants.length,
       restaurants,
+    };
+
+    // Store result in Redis
+    await redisClient.set(cacheKey, JSON.stringify(response), {
+      EX: 600,
     });
+
+    res.status(200).json(response);
   } catch (error) {
     console.error(error);
 
@@ -59,13 +81,35 @@ const getAllRestaurants = async (req, res) => {
 
 const getRestaurantById = async (req, res) => {
   try {
-    const restaurant = await Restaurant.findById(req.params.id);
+    const restaurantId = req.params.id;
+    const cacheKey = `restaurant:${restaurantId}`;
+
+    // Check Redis first
+    const cachedRestaurant = await redisClient.get(cacheKey);
+
+    if (cachedRestaurant) {
+      console.log("Redis Cache HIT");
+
+      return res.status(200).json({
+        restaurant: JSON.parse(cachedRestaurant),
+      });
+    }
+
+    console.log("Redis Cache MISS");
+
+    // Get from MongoDB
+    const restaurant = await Restaurant.findById(restaurantId);
 
     if (!restaurant) {
       return res.status(404).json({
         message: "Restaurant not found",
       });
     }
+
+    // Store restaurant in Redis
+    await redisClient.set(cacheKey, JSON.stringify(restaurant), {
+      EX: 600,
+    });
 
     res.status(200).json({
       restaurant,
@@ -78,6 +122,7 @@ const getRestaurantById = async (req, res) => {
     });
   }
 };
+
 const updateRestaurant = async (req, res) => {
   try {
     const restaurant = await Restaurant.findById(req.params.id);
@@ -108,6 +153,8 @@ const updateRestaurant = async (req, res) => {
     restaurant.isOpen = isOpen ?? restaurant.isOpen;
 
     await restaurant.save();
+    await redisClient.del("restaurants:all");
+    await redisClient.del(`restaurant:${req.params.id}`);
 
     res.status(200).json({
       message: "Restaurant updated successfully",
@@ -143,6 +190,8 @@ const deleteRestaurant = async (req, res) => {
     }
 
     await Restaurant.findByIdAndDelete(req.params.id);
+    await redisClient.del("restaurants:all");
+    await redisClient.del(`restaurant:${req.params.id}`);
 
     res.status(200).json({
       message: "Restaurant deleted successfully",
