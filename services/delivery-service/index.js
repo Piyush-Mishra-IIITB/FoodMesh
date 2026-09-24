@@ -4,6 +4,8 @@ const express = require("express");
 const cookieParser = require("cookie-parser");
 
 const connectDB = require("./config/db");
+const { connectRedis } = require("./config/redis");
+
 const deliveryPartnerRoutes = require("./routes/deliveryPartnerRoutes");
 
 const app = express();
@@ -16,6 +18,7 @@ app.use("/api/delivery", deliveryPartnerRoutes);
 const PORT = process.env.PORT || 5004;
 
 connectDB();
+connectRedis();
 
 app.listen(PORT, () => {
   console.log(`Delivery Service running on port ${PORT}`);

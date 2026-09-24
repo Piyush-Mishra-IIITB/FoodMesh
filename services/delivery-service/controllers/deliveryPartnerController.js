@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const DeliveryPartner = require("../models/deliveryPartnerModel");
 const calculateDistance = require("../utils/distance");
+const { redisClient } = require("../config/redis");
 // CREATE DELIVERY PARTNER
 
 const createDeliveryPartner = async (req, res) => {
@@ -297,15 +298,30 @@ const findNearestPartner = async (req, res) => {
 // Internal endpoint for Order Service
 
 const assignDeliveryPartner = async (req, res) => {
-  try {
-    const { partnerId } = req.body;
+  const { partnerId } = req.body;
 
-    if (!partnerId) {
-      return res.status(400).json({
-        message: "Partner ID is required",
+  if (!partnerId) {
+    return res.status(400).json({
+      message: "Partner ID is required",
+    });
+  }
+
+  const lockKey = `lock:delivery-partner:${partnerId}`;
+
+  try {
+    // Try to acquire lock
+    const lockAcquired = await redisClient.set(lockKey, "locked", {
+      NX: true,
+      EX: 10,
+    });
+
+    if (lockAcquired !== "OK") {
+      return res.status(409).json({
+        message: "Delivery partner is currently being assigned",
       });
     }
 
+    // Critical section starts
     const deliveryPartner = await DeliveryPartner.findById(partnerId);
 
     if (!deliveryPartner) {
@@ -320,10 +336,12 @@ const assignDeliveryPartner = async (req, res) => {
       });
     }
 
-    // Partner is now busy with an order
+    // Partner is now busy
     deliveryPartner.isAvailable = false;
 
     await deliveryPartner.save();
+
+    // Critical section ends
 
     res.status(200).json({
       message: "Delivery partner assigned successfully",
@@ -335,6 +353,9 @@ const assignDeliveryPartner = async (req, res) => {
     res.status(500).json({
       message: "Server error",
     });
+  } finally {
+    // Release lock
+    await redisClient.del(lockKey);
   }
 };
 // RELEASE DELIVERY PARTNER
