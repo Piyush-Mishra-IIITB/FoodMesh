@@ -1,5 +1,6 @@
 const MenuItem = require("../models/menuItemModel");
 const Restaurant = require("../models/restaurantModel");
+const { redisClient } = require("../config/redis");
 
 // Create menu item
 const createMenuItem = async (req, res) => {
@@ -47,7 +48,11 @@ const createMenuItem = async (req, res) => {
       isVegetarian,
       image,
     });
-
+    try {
+      await redisClient.del(`menu:restaurant:${restaurantId}`);
+    } catch (redisError) {
+      console.error("Redis DELETE failed:", redisError.message);
+    }
     res.status(201).json({
       message: "Menu item created successfully",
       menuItem,
@@ -65,7 +70,24 @@ const createMenuItem = async (req, res) => {
 const getRestaurantMenu = async (req, res) => {
   try {
     const { restaurantId } = req.params;
+    const cacheKey = `menu:restaurant:${restaurantId}`;
 
+    // Try Redis
+    try {
+      const cachedMenu = await redisClient.get(cacheKey);
+
+      if (cachedMenu) {
+        console.log("Redis Cache HIT");
+
+        return res.status(200).json(JSON.parse(cachedMenu));
+      }
+
+      console.log("Redis Cache MISS");
+    } catch (redisError) {
+      console.error("Redis GET failed:", redisError.message);
+    }
+
+    // MongoDB remains the source of truth
     const restaurant = await Restaurant.findById(restaurantId);
 
     if (!restaurant) {
@@ -78,10 +100,21 @@ const getRestaurantMenu = async (req, res) => {
       restaurant: restaurantId,
     });
 
-    res.status(200).json({
+    const response = {
       count: menuItems.length,
       menuItems,
-    });
+    };
+
+    // Try to cache the result
+    try {
+      await redisClient.set(cacheKey, JSON.stringify(response), {
+        EX: 600,
+      });
+    } catch (redisError) {
+      console.error("Redis SET failed:", redisError.message);
+    }
+
+    res.status(200).json(response);
   } catch (error) {
     console.error(error);
 
@@ -90,16 +123,45 @@ const getRestaurantMenu = async (req, res) => {
     });
   }
 };
-
 // Get single menu item
 const getMenuItem = async (req, res) => {
   try {
-    const menuItem = await MenuItem.findById(req.params.id);
+    const menuItemId = req.params.id;
+    const cacheKey = `menu:item:${menuItemId}`;
+
+    // Try Redis
+    try {
+      const cachedMenuItem = await redisClient.get(cacheKey);
+
+      if (cachedMenuItem) {
+        console.log("Redis Cache HIT");
+
+        return res.status(200).json({
+          menuItem: JSON.parse(cachedMenuItem),
+        });
+      }
+
+      console.log("Redis Cache MISS");
+    } catch (redisError) {
+      console.error("Redis GET failed:", redisError.message);
+    }
+
+    // MongoDB remains the source of truth
+    const menuItem = await MenuItem.findById(menuItemId);
 
     if (!menuItem) {
       return res.status(404).json({
         message: "Menu item not found",
       });
+    }
+
+    // Try to cache the result
+    try {
+      await redisClient.set(cacheKey, JSON.stringify(menuItem), {
+        EX: 600,
+      });
+    } catch (redisError) {
+      console.error("Redis SET failed:", redisError.message);
     }
 
     res.status(200).json({
@@ -113,7 +175,6 @@ const getMenuItem = async (req, res) => {
     });
   }
 };
-
 // Update menu item
 const updateMenuItem = async (req, res) => {
   try {
@@ -161,7 +222,12 @@ const updateMenuItem = async (req, res) => {
     menuItem.image = image ?? menuItem.image;
 
     await menuItem.save();
-
+    try {
+      await redisClient.del(`menu:item:${req.params.id}`);
+      await redisClient.del(`menu:restaurant:${menuItem.restaurant}`);
+    } catch (redisError) {
+      console.error("Redis DELETE failed:", redisError.message);
+    }
     res.status(200).json({
       message: "Menu item updated successfully",
       menuItem,
@@ -205,6 +271,12 @@ const deleteMenuItem = async (req, res) => {
 
     await MenuItem.findByIdAndDelete(req.params.id);
 
+    try {
+      await redisClient.del(`menu:item:${req.params.id}`);
+      await redisClient.del(`menu:restaurant:${menuItem.restaurant}`);
+    } catch (redisError) {
+      console.error("Redis DELETE failed:", redisError.message);
+    }
     res.status(200).json({
       message: "Menu item deleted successfully",
     });

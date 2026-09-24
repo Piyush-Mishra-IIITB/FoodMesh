@@ -28,7 +28,11 @@ const createRestaurant = async (req, res) => {
       address,
       cuisine,
     });
-    await redisClient.del("restaurants:all");
+    try {
+      await redisClient.del("restaurants:all");
+    } catch (redisError) {
+      console.error("Redis DELETE failed:", redisError.message);
+    }
     res.status(201).json({
       message: "Restaurant created successfully",
       restaurant,
@@ -45,18 +49,22 @@ const getAllRestaurants = async (req, res) => {
   try {
     const cacheKey = "restaurants:all";
 
-    // Check Redis first
-    const cachedRestaurants = await redisClient.get(cacheKey);
+    // Try Redis
+    try {
+      const cachedRestaurants = await redisClient.get(cacheKey);
 
-    if (cachedRestaurants) {
-      console.log("Redis Cache HIT");
+      if (cachedRestaurants) {
+        console.log("Redis Cache HIT");
 
-      return res.status(200).json(JSON.parse(cachedRestaurants));
+        return res.status(200).json(JSON.parse(cachedRestaurants));
+      }
+
+      console.log("Redis Cache MISS");
+    } catch (redisError) {
+      console.error("Redis GET failed:", redisError.message);
     }
 
-    console.log("Redis Cache MISS");
-
-    // If not in Redis, get from MongoDB
+    // MongoDB remains the source of truth
     const restaurants = await Restaurant.find();
 
     const response = {
@@ -64,10 +72,14 @@ const getAllRestaurants = async (req, res) => {
       restaurants,
     };
 
-    // Store result in Redis
-    await redisClient.set(cacheKey, JSON.stringify(response), {
-      EX: 600,
-    });
+    // Try to cache
+    try {
+      await redisClient.set(cacheKey, JSON.stringify(response), {
+        EX: 600,
+      });
+    } catch (redisError) {
+      console.error("Redis SET failed:", redisError.message);
+    }
 
     res.status(200).json(response);
   } catch (error) {
@@ -84,20 +96,24 @@ const getRestaurantById = async (req, res) => {
     const restaurantId = req.params.id;
     const cacheKey = `restaurant:${restaurantId}`;
 
-    // Check Redis first
-    const cachedRestaurant = await redisClient.get(cacheKey);
+    // Try Redis
+    try {
+      const cachedRestaurant = await redisClient.get(cacheKey);
 
-    if (cachedRestaurant) {
-      console.log("Redis Cache HIT");
+      if (cachedRestaurant) {
+        console.log("Redis Cache HIT");
 
-      return res.status(200).json({
-        restaurant: JSON.parse(cachedRestaurant),
-      });
+        return res.status(200).json({
+          restaurant: JSON.parse(cachedRestaurant),
+        });
+      }
+
+      console.log("Redis Cache MISS");
+    } catch (redisError) {
+      console.error("Redis GET failed:", redisError.message);
     }
 
-    console.log("Redis Cache MISS");
-
-    // Get from MongoDB
+    // MongoDB remains the source of truth
     const restaurant = await Restaurant.findById(restaurantId);
 
     if (!restaurant) {
@@ -106,10 +122,14 @@ const getRestaurantById = async (req, res) => {
       });
     }
 
-    // Store restaurant in Redis
-    await redisClient.set(cacheKey, JSON.stringify(restaurant), {
-      EX: 600,
-    });
+    // Try to cache
+    try {
+      await redisClient.set(cacheKey, JSON.stringify(restaurant), {
+        EX: 600,
+      });
+    } catch (redisError) {
+      console.error("Redis SET failed:", redisError.message);
+    }
 
     res.status(200).json({
       restaurant,
@@ -153,8 +173,12 @@ const updateRestaurant = async (req, res) => {
     restaurant.isOpen = isOpen ?? restaurant.isOpen;
 
     await restaurant.save();
-    await redisClient.del("restaurants:all");
-    await redisClient.del(`restaurant:${req.params.id}`);
+    try {
+      await redisClient.del("restaurants:all");
+      await redisClient.del(`restaurant:${req.params.id}`);
+    } catch (redisError) {
+      console.error("Redis DELETE failed:", redisError.message);
+    }
 
     res.status(200).json({
       message: "Restaurant updated successfully",
@@ -189,9 +213,12 @@ const deleteRestaurant = async (req, res) => {
       });
     }
 
-    await Restaurant.findByIdAndDelete(req.params.id);
-    await redisClient.del("restaurants:all");
-    await redisClient.del(`restaurant:${req.params.id}`);
+    try {
+      await redisClient.del("restaurants:all");
+      await redisClient.del(`restaurant:${req.params.id}`);
+    } catch (redisError) {
+      console.error("Redis DELETE failed:", redisError.message);
+    }
 
     res.status(200).json({
       message: "Restaurant deleted successfully",

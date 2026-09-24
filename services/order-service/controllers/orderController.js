@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const axios = require("axios");
 const Order = require("../models/orderModel");
+const { redisClient } = require("../config/redis");
 const RESTAURANT_SERVICE_URL =
   process.env.RESTAURANT_SERVICE_URL || "http://localhost:5002";
 
@@ -75,6 +76,20 @@ const createOrder = async (req, res) => {
       throw err;
     }
     const updatedOrder = await Order.findById(order._id);
+
+    // Invalidate Redis caches
+    try {
+      const keysToDelete = [
+        `orders:customer:${order.customer}`,
+        `orders:restaurant:${order.restaurant}`,
+      ];
+
+      await redisClient.del(keysToDelete);
+
+      console.log("Order creation Redis caches invalidated");
+    } catch (redisError) {
+      console.error("Redis cache invalidation failed:", redisError.message);
+    }
     res.status(201).json({
       message: "Order created successfully",
       order: updatedOrder,
@@ -97,11 +112,41 @@ const createOrder = async (req, res) => {
 // GET MY ORDERS
 const getMyOrders = async (req, res) => {
   try {
+    const customerId = req.user.userId;
+    const cacheKey = `orders:customer:${customerId}`;
+
+    // Check Redis cache
+    try {
+      const cachedOrders = await redisClient.get(cacheKey);
+
+      if (cachedOrders) {
+        console.log("Orders fetched from Redis");
+
+        return res.status(200).json({
+          orders: JSON.parse(cachedOrders),
+        });
+      }
+    } catch (redisError) {
+      console.error("Redis GET failed:", redisError.message);
+    }
+
+    // Cache miss -> fetch from MongoDB
     const orders = await Order.find({
-      customer: req.user.userId,
+      customer: customerId,
     }).sort({
       createdAt: -1,
     });
+
+    // Store result in Redis
+    try {
+      await redisClient.set(cacheKey, JSON.stringify(orders), {
+        EX: 600,
+      });
+
+      console.log("Orders cached in Redis");
+    } catch (redisError) {
+      console.error("Redis SET failed:", redisError.message);
+    }
 
     res.status(200).json({
       orders,
@@ -118,13 +163,45 @@ const getMyOrders = async (req, res) => {
 // GET ORDER BY ID
 const getOrderById = async (req, res) => {
   try {
-    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    const orderId = req.params.id;
+
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
       return res.status(400).json({
         message: "Invalid order ID",
       });
     }
 
-    const order = await Order.findById(req.params.id);
+    const cacheKey = `order:${orderId}`;
+
+    // Check Redis cache
+    try {
+      const cachedOrder = await redisClient.get(cacheKey);
+
+      if (cachedOrder) {
+        const order = JSON.parse(cachedOrder);
+
+        // Customer can only view their own order
+        if (
+          req.user.role === "customer" &&
+          order.customer.toString() !== req.user.userId
+        ) {
+          return res.status(403).json({
+            message: "You are not allowed to view this order",
+          });
+        }
+
+        console.log("Order fetched from Redis");
+
+        return res.status(200).json({
+          order,
+        });
+      }
+    } catch (redisError) {
+      console.error("Redis GET failed:", redisError.message);
+    }
+
+    // Cache miss -> fetch from MongoDB
+    const order = await Order.findById(orderId);
 
     if (!order) {
       return res.status(404).json({
@@ -142,6 +219,17 @@ const getOrderById = async (req, res) => {
       });
     }
 
+    // Store in Redis
+    try {
+      await redisClient.set(cacheKey, JSON.stringify(order), {
+        EX: 600,
+      });
+
+      console.log("Order cached in Redis");
+    } catch (redisError) {
+      console.error("Redis SET failed:", redisError.message);
+    }
+
     res.status(200).json({
       order,
     });
@@ -153,6 +241,7 @@ const getOrderById = async (req, res) => {
     });
   }
 };
+// GET RESTAURANT ORDERS
 
 // GET RESTAURANT ORDERS
 
@@ -165,12 +254,40 @@ const getRestaurantOrders = async (req, res) => {
 
     const restaurantId = response.data.restaurant.id;
 
-    // Get orders for that restaurant
+    const cacheKey = `orders:restaurant:${restaurantId}`;
+
+    // Check Redis cache
+    try {
+      const cachedOrders = await redisClient.get(cacheKey);
+
+      if (cachedOrders) {
+        console.log("Restaurant orders fetched from Redis");
+
+        return res.status(200).json({
+          orders: JSON.parse(cachedOrders),
+        });
+      }
+    } catch (redisError) {
+      console.error("Redis GET failed:", redisError.message);
+    }
+
+    // Cache miss -> fetch from MongoDB
     const orders = await Order.find({
       restaurant: restaurantId,
     }).sort({
       createdAt: -1,
     });
+
+    // Store in Redis
+    try {
+      await redisClient.set(cacheKey, JSON.stringify(orders), {
+        EX: 600,
+      });
+
+      console.log("Restaurant orders cached in Redis");
+    } catch (redisError) {
+      console.error("Redis SET failed:", redisError.message);
+    }
 
     res.status(200).json({
       orders,
@@ -204,7 +321,7 @@ const updateOrderStatus = async (req, res) => {
         message: "Order not found",
       });
     }
-
+    const previousDeliveryPartner = order.deliveryPartner;
     const currentStatus = order.status;
 
     // Restaurant owner flow
@@ -348,7 +465,35 @@ const updateOrderStatus = async (req, res) => {
     order.status = status;
 
     await order.save();
+    // Invalidate Redis caches
+    try {
+      const keysToDelete = [
+        `order:${order._id}`,
+        `orders:customer:${order.customer}`,
+        `orders:restaurant:${order.restaurant}`,
+      ];
 
+      // Invalidate current delivery partner cache
+      if (order.deliveryPartner) {
+        keysToDelete.push(`orders:delivery:${order.deliveryPartner}`);
+      }
+
+      // Invalidate previous delivery partner cache
+      if (
+        previousDeliveryPartner &&
+        (!order.deliveryPartner ||
+          previousDeliveryPartner.toString() !==
+            order.deliveryPartner.toString())
+      ) {
+        keysToDelete.push(`orders:delivery:${previousDeliveryPartner}`);
+      }
+
+      await redisClient.del(keysToDelete);
+
+      console.log("Order Redis caches invalidated");
+    } catch (redisError) {
+      console.error("Redis cache invalidation failed:", redisError.message);
+    }
     // Delivery completed
     if (req.user.role === "delivery_partner" && status === "DELIVERED") {
       await axios.patch(
@@ -456,6 +601,21 @@ const assignDeliveryPartner = async (req, res) => {
       order.deliveryPartner = partner._id;
 
       await order.save();
+      // Invalidate Redis caches
+      try {
+        const keysToDelete = [
+          `order:${order._id}`,
+          `orders:customer:${order.customer}`,
+          `orders:restaurant:${order.restaurant}`,
+          `orders:delivery:${partner._id}`,
+        ];
+
+        await redisClient.del(keysToDelete);
+
+        console.log("Delivery assignment Redis caches invalidated");
+      } catch (redisError) {
+        console.error("Redis cache invalidation failed:", redisError.message);
+      }
     } catch (error) {
       await axios.patch(
         `${DELIVERY_SERVICE_URL}/api/delivery/internal/release`,
@@ -489,6 +649,7 @@ const assignDeliveryPartner = async (req, res) => {
 };
 
 // GET DELIVERY ORDERS
+
 const getDeliveryOrders = async (req, res) => {
   try {
     const response = await axios.get(
@@ -497,11 +658,40 @@ const getDeliveryOrders = async (req, res) => {
 
     const deliveryPartnerId = response.data.deliveryPartner.id;
 
+    const cacheKey = `orders:delivery:${deliveryPartnerId}`;
+
+    // Check Redis cache
+    try {
+      const cachedOrders = await redisClient.get(cacheKey);
+
+      if (cachedOrders) {
+        console.log("Delivery orders fetched from Redis");
+
+        return res.status(200).json({
+          orders: JSON.parse(cachedOrders),
+        });
+      }
+    } catch (redisError) {
+      console.error("Redis GET failed:", redisError.message);
+    }
+
+    // Cache miss -> fetch from MongoDB
     const orders = await Order.find({
       deliveryPartner: deliveryPartnerId,
     }).sort({
       createdAt: -1,
     });
+
+    // Store in Redis
+    try {
+      await redisClient.set(cacheKey, JSON.stringify(orders), {
+        EX: 600,
+      });
+
+      console.log("Delivery orders cached in Redis");
+    } catch (redisError) {
+      console.error("Redis SET failed:", redisError.message);
+    }
 
     res.status(200).json({
       orders,
@@ -521,6 +711,9 @@ const getDeliveryOrders = async (req, res) => {
     });
   }
 };
+
+// UPDATE PAYMENT STATUS
+// Internal endpoint for Payment Service
 
 // UPDATE PAYMENT STATUS
 // Internal endpoint for Payment Service
@@ -552,6 +745,25 @@ const updatePaymentStatus = async (req, res) => {
     order.paymentStatus = status;
 
     await order.save();
+
+    // Invalidate Redis caches
+    try {
+      const keysToDelete = [
+        `order:${order._id}`,
+        `orders:customer:${order.customer}`,
+        `orders:restaurant:${order.restaurant}`,
+      ];
+
+      if (order.deliveryPartner) {
+        keysToDelete.push(`orders:delivery:${order.deliveryPartner}`);
+      }
+
+      await redisClient.del(keysToDelete);
+
+      console.log("Payment-related Redis caches invalidated");
+    } catch (redisError) {
+      console.error("Redis cache invalidation failed:", redisError.message);
+    }
 
     res.status(200).json({
       message: "Payment status updated successfully",

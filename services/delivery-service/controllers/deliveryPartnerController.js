@@ -2,6 +2,8 @@ const mongoose = require("mongoose");
 const DeliveryPartner = require("../models/deliveryPartnerModel");
 const calculateDistance = require("../utils/distance");
 const { redisClient } = require("../config/redis");
+const crypto = require("crypto");
+const { releaseLock } = require("../config/redisLock");
 // CREATE DELIVERY PARTNER
 
 const createDeliveryPartner = async (req, res) => {
@@ -307,13 +309,24 @@ const assignDeliveryPartner = async (req, res) => {
   }
 
   const lockKey = `lock:delivery-partner:${partnerId}`;
+  const lockToken = crypto.randomUUID();
 
   try {
     // Try to acquire lock
-    const lockAcquired = await redisClient.set(lockKey, "locked", {
-      NX: true,
-      EX: 10,
-    });
+    let lockAcquired;
+
+    try {
+      lockAcquired = await redisClient.set(lockKey, lockToken, {
+        NX: true,
+        EX: 10,
+      });
+    } catch (redisError) {
+      console.error("Redis lock acquisition failed:", redisError.message);
+
+      return res.status(503).json({
+        message: "Delivery assignment temporarily unavailable",
+      });
+    }
 
     if (lockAcquired !== "OK") {
       return res.status(409).json({
@@ -354,8 +367,11 @@ const assignDeliveryPartner = async (req, res) => {
       message: "Server error",
     });
   } finally {
-    // Release lock
-    await redisClient.del(lockKey);
+    try {
+      await releaseLock(lockKey, lockToken);
+    } catch (redisError) {
+      console.error("Redis lock release failed:", redisError.message);
+    }
   }
 };
 // RELEASE DELIVERY PARTNER
