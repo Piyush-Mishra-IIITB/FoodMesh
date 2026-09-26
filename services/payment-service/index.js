@@ -1,5 +1,5 @@
 require("dotenv").config();
-
+const { connectRabbitMQ, consumePaymentEvents } = require("./config/rabbitmq");
 const express = require("express");
 
 const connectDB = require("./config/db");
@@ -15,6 +15,18 @@ const PORT = process.env.PORT || 5005;
 
 connectDB();
 
-app.listen(PORT, () => {
-  console.log(`Payment Service running on port ${PORT}`);
-});
+const startServer = async () => {
+  try {
+    await connectRabbitMQ();
+    await consumePaymentEvents();
+
+    app.listen(PORT, () => {
+      console.log(`Payment Service running on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error("Failed to start Payment Service:", error.message);
+    process.exit(1);
+  }
+};
+
+startServer();

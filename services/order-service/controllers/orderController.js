@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const axios = require("axios");
 const Order = require("../models/orderModel");
+const { getChannel } = require("../config/rabbitmq");
 const { redisClient } = require("../config/redis");
 const RESTAURANT_SERVICE_URL =
   process.env.RESTAURANT_SERVICE_URL || "http://localhost:5002";
@@ -63,21 +64,37 @@ const createOrder = async (req, res) => {
       paymentMethod,
     });
 
-    // payment
-    try {
-      await axios.post(`${PAYMENT_SERVICE_URL}/api/payments`, {
-        order: order._id,
-        customer: req.user.userId,
-        amount: totalAmount,
-        paymentMethod,
-      });
-    } catch (err) {
-      await Order.findByIdAndDelete(order._id);
-      throw err;
-    }
+    // =========================================
+    // Publish order.created event
+    // =========================================
+
+    const channel = getChannel();
+
+    channel.publish(
+      "food_delivery_events",
+      "order.created",
+      Buffer.from(
+        JSON.stringify({
+          orderId: order._id,
+          customer: order.customer,
+          restaurant: order.restaurant,
+          amount: order.totalAmount,
+          paymentMethod: order.paymentMethod,
+        }),
+      ),
+    );
+
+    // Wait for RabbitMQ publisher confirmation
+    await channel.waitForConfirms();
+
+    console.log("OrderCreated event confirmed by RabbitMQ");
+
     const updatedOrder = await Order.findById(order._id);
 
+    // =========================================
     // Invalidate Redis caches
+    // =========================================
+
     try {
       const keysToDelete = [
         `orders:customer:${order.customer}`,
@@ -90,6 +107,7 @@ const createOrder = async (req, res) => {
     } catch (redisError) {
       console.error("Redis cache invalidation failed:", redisError.message);
     }
+
     res.status(201).json({
       message: "Order created successfully",
       order: updatedOrder,
@@ -321,10 +339,14 @@ const updateOrderStatus = async (req, res) => {
         message: "Order not found",
       });
     }
+
     const previousDeliveryPartner = order.deliveryPartner;
     const currentStatus = order.status;
 
+    // =========================================
     // Restaurant owner flow
+    // =========================================
+
     if (req.user.role === "restaurant_owner") {
       const allowedTransitions = {
         PLACED: "CONFIRMED",
@@ -351,7 +373,10 @@ const updateOrderStatus = async (req, res) => {
       }
     }
 
+    // =========================================
     // Customer cancellation
+    // =========================================
+
     if (req.user.role === "customer") {
       if (currentStatus !== "PLACED" || status !== "CANCELLED") {
         return res.status(400).json({
@@ -385,7 +410,10 @@ const updateOrderStatus = async (req, res) => {
       }
     }
 
+    // =========================================
     // Delivery partner flow
+    // =========================================
+
     if (req.user.role === "delivery_partner") {
       const allowedTransitions = {
         READY: "PICKED_UP",
@@ -406,7 +434,10 @@ const updateOrderStatus = async (req, res) => {
       }
     }
 
-    // Automatically assign delivery partner when order becomes READY
+    // =========================================
+    // Publish order.ready event
+    // =========================================
+
     if (
       req.user.role === "restaurant_owner" &&
       currentStatus === "PREPARING" &&
@@ -428,44 +459,51 @@ const updateOrderStatus = async (req, res) => {
           });
         }
 
-        const partnerResponse = await axios.post(
-          `${DELIVERY_SERVICE_URL}/api/delivery/internal/nearest`,
-          {
-            latitude,
-            longitude,
-          },
+        // =========================================
+        // Publish order.ready event
+        // =========================================
+
+        const channel = getChannel();
+
+        channel.publish(
+          "food_delivery_events",
+          "order.ready",
+          Buffer.from(
+            JSON.stringify({
+              orderId: order._id,
+              restaurantId: order.restaurant,
+              latitude,
+              longitude,
+            }),
+          ),
         );
 
-        const partner = partnerResponse.data.partner;
+        // Wait for RabbitMQ publisher confirmation
+        await channel.waitForConfirms();
 
-        await axios.patch(
-          `${DELIVERY_SERVICE_URL}/api/delivery/internal/assign`,
-          {
-            partnerId: partner._id,
-          },
-        );
-
-        order.deliveryPartner = partner._id;
+        console.log("OrderReady event confirmed by RabbitMQ");
       } catch (error) {
-        console.error(error);
-
-        if (error.response) {
-          return res.status(error.response.status).json({
-            message:
-              error.response.data.message || "Delivery Service request failed",
-          });
-        }
+        console.error("Failed to publish order.ready event:", error.message);
 
         return res.status(500).json({
-          message: "Failed to assign delivery partner",
+          message:
+            "Order status was not updated because order.ready event could not be confirmed by RabbitMQ",
         });
       }
     }
 
+    // =========================================
+    // Update order status
+    // =========================================
+
     order.status = status;
 
     await order.save();
+
+    // =========================================
     // Invalidate Redis caches
+    // =========================================
+
     try {
       const keysToDelete = [
         `order:${order._id}`,
@@ -494,7 +532,11 @@ const updateOrderStatus = async (req, res) => {
     } catch (redisError) {
       console.error("Redis cache invalidation failed:", redisError.message);
     }
+
+    // =========================================
     // Delivery completed
+    // =========================================
+
     if (req.user.role === "delivery_partner" && status === "DELIVERED") {
       await axios.patch(
         `${DELIVERY_SERVICE_URL}/api/delivery/internal/complete`,
@@ -503,7 +545,9 @@ const updateOrderStatus = async (req, res) => {
         },
       );
     }
+
     const updatedOrder = await Order.findById(order._id);
+
     res.status(200).json({
       message: "Order status updated successfully",
       order: updatedOrder,

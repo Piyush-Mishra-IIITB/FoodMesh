@@ -240,7 +240,88 @@ const getAvailablePartners = async (req, res) => {
     });
   }
 };
+// FIND NEAREST AVAILABLE PARTNER
+const findNearestAvailablePartner = async (latitude, longitude) => {
+  const partners = await DeliveryPartner.find({
+    isOnline: true,
+    isAvailable: true,
+    "currentLocation.latitude": { $exists: true },
+    "currentLocation.longitude": { $exists: true },
+  }).select("_id user currentLocation rating totalDeliveries");
 
+  if (partners.length === 0) {
+    throw new Error("No available delivery partners");
+  }
+
+  let nearestPartner = null;
+  let shortestDistance = Infinity;
+
+  for (const partner of partners) {
+    const distance = calculateDistance(
+      latitude,
+      longitude,
+      partner.currentLocation.latitude,
+      partner.currentLocation.longitude,
+    );
+
+    if (distance < shortestDistance) {
+      shortestDistance = distance;
+      nearestPartner = partner;
+    }
+  }
+
+  return {
+    partner: nearestPartner,
+    distanceInKm: shortestDistance,
+  };
+};
+
+// ASSIGN PARTNER WITH REDIS LOCK
+const assignPartner = async (partnerId) => {
+  const lockKey = `lock:delivery-partner:${partnerId}`;
+  const lockToken = crypto.randomUUID();
+
+  try {
+    let lockAcquired;
+
+    try {
+      lockAcquired = await redisClient.set(lockKey, lockToken, {
+        NX: true,
+        EX: 10,
+      });
+    } catch (redisError) {
+      console.error("Redis lock acquisition failed:", redisError.message);
+
+      throw new Error("Delivery assignment temporarily unavailable");
+    }
+
+    if (lockAcquired !== "OK") {
+      throw new Error("Delivery partner is currently being assigned");
+    }
+
+    const deliveryPartner = await DeliveryPartner.findById(partnerId);
+
+    if (!deliveryPartner) {
+      throw new Error("Delivery partner not found");
+    }
+
+    if (!deliveryPartner.isOnline || !deliveryPartner.isAvailable) {
+      throw new Error("Delivery partner is not available");
+    }
+
+    deliveryPartner.isAvailable = false;
+
+    await deliveryPartner.save();
+
+    return deliveryPartner;
+  } finally {
+    try {
+      await releaseLock(lockKey, lockToken);
+    } catch (redisError) {
+      console.error("Redis lock release failed:", redisError.message);
+    }
+  }
+};
 // FIND NEAREST AVAILABLE DELIVERY PARTNER
 // Internal endpoint for Order Service
 
@@ -492,4 +573,6 @@ module.exports = {
   releaseDeliveryPartner,
   completeDelivery,
   getPartnerByUser,
+  findNearestAvailablePartner,
+  assignPartner,
 };

@@ -3,48 +3,52 @@ const axios = require("axios");
 
 const ORDER_SERVICE_URL =
   process.env.ORDER_SERVICE_URL || "http://localhost:5003";
+
+const processPayment = async ({ order, customer, amount, paymentMethod }) => {
+  if (!order || !customer || !amount || !paymentMethod) {
+    throw new Error("Please provide all required fields");
+  }
+
+  if (!["COD", "ONLINE"].includes(paymentMethod)) {
+    throw new Error("Invalid payment method");
+  }
+
+  const existingPayment = await Payment.findOne({
+    order,
+  });
+
+  if (existingPayment) {
+    throw new Error("Payment already exists for this order");
+  }
+
+  const payment = await Payment.create({
+    order,
+    customer,
+    amount,
+    paymentMethod,
+    status: "PAID",
+    transactionId: paymentMethod === "ONLINE" ? `TXN_${Date.now()}` : null,
+  });
+
+  await axios.patch(`${ORDER_SERVICE_URL}/api/orders/internal/payment-status`, {
+    orderId: order,
+    status: payment.status,
+  });
+
+  return payment;
+};
 // CREATE PAYMENT
 const createPayment = async (req, res) => {
   try {
     const { order, customer, amount, paymentMethod } = req.body;
 
-    if (!order || !customer || !amount || !paymentMethod) {
-      return res.status(400).json({
-        message: "Please provide all required fields",
-      });
-    }
-
-    if (!["COD", "ONLINE"].includes(paymentMethod)) {
-      return res.status(400).json({
-        message: "Invalid payment method",
-      });
-    }
-
-    const existingPayment = await Payment.findOne({
-      order,
-    });
-
-    if (existingPayment) {
-      return res.status(400).json({
-        message: "Payment already exists for this order",
-      });
-    }
-
-    const payment = await Payment.create({
+    const payment = await processPayment({
       order,
       customer,
       amount,
       paymentMethod,
-      status: paymentMethod === "COD" ? "PAID" : "PAID",
-      transactionId: paymentMethod === "ONLINE" ? `TXN_${Date.now()}` : null,
     });
-    await axios.patch(
-      `${ORDER_SERVICE_URL}/api/orders/internal/payment-status`,
-      {
-        orderId: order,
-        status: payment.status,
-      },
-    );
+
     res.status(201).json({
       message: "Payment processed successfully",
       payment,
@@ -53,11 +57,10 @@ const createPayment = async (req, res) => {
     console.error(error);
 
     res.status(500).json({
-      message: "Server error",
+      message: error.message || "Server error",
     });
   }
 };
-
 // GET PAYMENT BY ORDER
 const getPaymentByOrder = async (req, res) => {
   try {
@@ -138,4 +141,5 @@ module.exports = {
   createPayment,
   getPaymentByOrder,
   refundPayment,
+  processPayment,
 };
