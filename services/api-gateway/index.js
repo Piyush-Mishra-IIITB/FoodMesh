@@ -4,7 +4,7 @@ require("dotenv").config();
 
 const { v4: uuidv4 } = require("uuid");
 const writeLog = require("./logger");
-
+const rateLimit = require("express-rate-limit");
 const app = express();
 
 const PORT = process.env.PORT || 5000;
@@ -42,7 +42,21 @@ app.use((req, res, next) => {
 
   next();
 });
+// ===============================
+// Rate Limiting
+// ===============================
 
+const limiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    message: "Too many requests, please try again later.",
+  },
+});
+
+app.use(limiter);
 // ===============================
 // User Service
 // ===============================
