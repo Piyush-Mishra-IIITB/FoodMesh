@@ -2,12 +2,51 @@ const express = require("express");
 const { createProxyMiddleware } = require("http-proxy-middleware");
 require("dotenv").config();
 
+const { v4: uuidv4 } = require("uuid");
+const writeLog = require("./logger");
+
 const app = express();
 
 const PORT = process.env.PORT || 5000;
-const USER_SERVICE_URL = process.env.USER_SERVICE_URL;
 
+const USER_SERVICE_URL = process.env.USER_SERVICE_URL;
+const RESTAURANT_SERVICE_URL = process.env.RESTAURANT_SERVICE_URL;
+const ORDER_SERVICE_URL = process.env.ORDER_SERVICE_URL;
+const DELIVERY_SERVICE_URL = process.env.DELIVERY_SERVICE_URL;
+const PAYMENT_SERVICE_URL = process.env.PAYMENT_SERVICE_URL;
+
+// ===============================
+// Request ID + Logging Middleware
+// ===============================
+app.use((req, res, next) => {
+  const requestId = uuidv4();
+  const startTime = Date.now();
+
+  req.requestId = requestId;
+
+  res.setHeader("X-Request-ID", requestId);
+
+  res.on("finish", () => {
+    const responseTime = Date.now() - startTime;
+
+    const logLevel =
+      res.statusCode >= 500 ? "ERROR" : res.statusCode >= 400 ? "WARN" : "INFO";
+
+    writeLog(
+      `[${logLevel}] [Gateway] ${req.method} ${req.originalUrl} | ` +
+        `Status: ${res.statusCode} | ` +
+        `Response Time: ${responseTime}ms | ` +
+        `Request ID: ${requestId}`,
+    );
+  });
+
+  next();
+});
+
+// ===============================
 // User Service
+// ===============================
+
 app.use(
   "/api/users",
   createProxyMiddleware({
@@ -16,56 +55,103 @@ app.use(
   }),
 );
 
+// ===============================
 // Restaurant Service
+// ===============================
+
 app.use(
   "/api/restaurants",
   createProxyMiddleware({
-    target: `${process.env.RESTAURANT_SERVICE_URL}/api/restaurants`,
+    target: `${RESTAURANT_SERVICE_URL}/api/restaurants`,
     changeOrigin: true,
   }),
 );
 
-// Menu routes
+// ===============================
+// Menu Service
+// ===============================
+
+// Block internal Restaurant/Menu endpoints
+app.use("/api/menu/internal", (req, res) => {
+  return res.status(403).json({
+    message: "Internal endpoint not accessible through API Gateway",
+  });
+});
+
+// Public Menu routes
 app.use(
   "/api/menu",
   createProxyMiddleware({
-    target: `${process.env.RESTAURANT_SERVICE_URL}/api/menu`,
+    target: `${RESTAURANT_SERVICE_URL}/api/menu`,
     changeOrigin: true,
   }),
 );
+
+// ===============================
+// Order Service
+// ===============================
+
+// Block internal Order Service endpoints
+app.use("/api/orders/internal", (req, res) => {
+  return res.status(403).json({
+    message: "Internal endpoint not accessible through API Gateway",
+  });
+});
 
 // Order Service
 app.use(
   "/api/orders",
   createProxyMiddleware({
-    target: `${process.env.ORDER_SERVICE_URL}/api/orders`,
+    target: `${ORDER_SERVICE_URL}/api/orders`,
     changeOrigin: true,
   }),
 );
+
+// ===============================
+// Delivery Service
+// ===============================
+
+// Block internal Delivery Service endpoints
+app.use("/api/delivery/internal", (req, res) => {
+  return res.status(403).json({
+    message: "Internal endpoint not accessible through API Gateway",
+  });
+});
 
 // Delivery Service
 app.use(
   "/api/delivery",
   createProxyMiddleware({
-    target: `${process.env.DELIVERY_SERVICE_URL}/api/delivery`,
+    target: `${DELIVERY_SERVICE_URL}/api/delivery`,
     changeOrigin: true,
   }),
 );
 
+// ===============================
 // Payment Service
+// ===============================
+
 app.use(
   "/api/payments",
   createProxyMiddleware({
-    target: `${process.env.PAYMENT_SERVICE_URL}/api/payments`,
+    target: `${PAYMENT_SERVICE_URL}/api/payments`,
     changeOrigin: true,
   }),
 );
+
+// ===============================
+// Gateway Health Check
+// ===============================
 
 app.get("/health", (req, res) => {
   res.status(200).json({
     message: "API Gateway is running",
   });
 });
+
+// ===============================
+// Start Gateway
+// ===============================
 
 app.listen(PORT, () => {
   console.log(`API Gateway running on port ${PORT}`);
