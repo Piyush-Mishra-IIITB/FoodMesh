@@ -1,15 +1,42 @@
 const amqp = require("amqplib");
-
 const Order = require("../models/orderModel");
 
+let connection;
 let channel;
+
+// =========================================
+// Connect RabbitMQ
+// =========================================
 
 const connectRabbitMQ = async () => {
   try {
-    const connection = await amqp.connect("amqp://localhost:5672");
+    connection = await amqp.connect("amqp://localhost:5672");
+
+    connection.on("error", (error) => {
+      console.error("RabbitMQ connection error:", error.message);
+    });
+
+    connection.on("close", () => {
+      console.error("RabbitMQ connection closed");
+
+      connection = null;
+      channel = null;
+
+      setTimeout(() => {
+        reconnectRabbitMQ();
+      }, 5000);
+    });
 
     // Create Confirm Channel
     channel = await connection.createConfirmChannel();
+
+    channel.on("error", (error) => {
+      console.error("RabbitMQ channel error:", error.message);
+    });
+
+    channel.on("close", () => {
+      console.error("RabbitMQ channel closed");
+    });
 
     // =========================================
     // Main Exchange
@@ -52,8 +79,30 @@ const connectRabbitMQ = async () => {
     return channel;
   } catch (error) {
     console.error("RabbitMQ connection failed:", error.message);
-
     throw error;
+  }
+};
+
+// =========================================
+// Reconnect RabbitMQ
+// =========================================
+
+const reconnectRabbitMQ = async () => {
+  if (connection) {
+    return;
+  }
+
+  try {
+    console.log("Attempting to reconnect to RabbitMQ...");
+
+    await connectRabbitMQ();
+
+    console.log("RabbitMQ reconnected");
+
+    // Restart delivery.assigned consumer
+    await consumeDeliveryAssignedEvents();
+  } catch (error) {
+    console.error("RabbitMQ reconnection failed:", error.message);
   }
 };
 
@@ -74,9 +123,9 @@ const getChannel = () => {
 // =========================================
 
 const consumeDeliveryAssignedEvents = async () => {
-  const channel = getChannel();
+  const currentChannel = getChannel();
 
-  await channel.consume("order_delivery_queue", async (message) => {
+  await currentChannel.consume("order_delivery_queue", async (message) => {
     if (!message) return;
 
     try {
@@ -99,11 +148,11 @@ const consumeDeliveryAssignedEvents = async () => {
         eventData.deliveryPartnerId,
       );
 
-      channel.ack(message);
+      currentChannel.ack(message);
     } catch (error) {
       console.error("Error processing delivery.assigned event:", error.message);
 
-      channel.nack(message, false, true);
+      currentChannel.nack(message, false, true);
     }
   });
 

@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const OutboxEvent = require("../models/outboxEventModel");
 const axios = require("axios");
 const Order = require("../models/orderModel");
 const { getChannel } = require("../config/rabbitmq");
@@ -55,39 +56,58 @@ const createOrder = async (req, res) => {
     const orderItems = response.data.items;
     const totalAmount = response.data.totalAmount;
 
-    const order = await Order.create({
-      customer: req.user.userId,
-      restaurant,
-      items: orderItems,
-      deliveryAddress,
-      totalAmount,
-      paymentMethod,
-    });
-
     // =========================================
-    // Publish order.created event
+    // Transactional Outbox
     // =========================================
 
-    const channel = getChannel();
+    const session = await mongoose.startSession();
 
-    channel.publish(
-      "food_delivery_events",
-      "order.created",
-      Buffer.from(
-        JSON.stringify({
-          orderId: order._id,
-          customer: order.customer,
-          restaurant: order.restaurant,
-          amount: order.totalAmount,
-          paymentMethod: order.paymentMethod,
-        }),
-      ),
-    );
+    let order;
 
-    // Wait for RabbitMQ publisher confirmation
-    await channel.waitForConfirms();
+    try {
+      await session.withTransaction(async () => {
+        // Create order
+        const createdOrders = await Order.create(
+          [
+            {
+              customer: req.user.userId,
+              restaurant,
+              items: orderItems,
+              deliveryAddress,
+              totalAmount,
+              paymentMethod,
+            },
+          ],
+          { session },
+        );
 
-    console.log("OrderCreated event confirmed by RabbitMQ");
+        order = createdOrders[0];
+
+        // Create outbox event in the SAME transaction
+        await OutboxEvent.create(
+          [
+            {
+              eventType: "order.created",
+              exchange: "food_delivery_events",
+              routingKey: "order.created",
+              payload: {
+                orderId: order._id,
+                customer: order.customer,
+                restaurant: order.restaurant,
+                amount: order.totalAmount,
+                paymentMethod: order.paymentMethod,
+              },
+              status: "PENDING",
+            },
+          ],
+          { session },
+        );
+      });
+
+      console.log("Order and OutboxEvent committed successfully");
+    } finally {
+      await session.endSession();
+    }
 
     const updatedOrder = await Order.findById(order._id);
 

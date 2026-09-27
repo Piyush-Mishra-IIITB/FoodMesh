@@ -1,5 +1,6 @@
 require("dotenv").config();
 
+const startOutboxPublisher = require("./outboxPublisher");
 const express = require("express");
 const cookieParser = require("cookie-parser");
 
@@ -28,6 +29,8 @@ const startServer = async () => {
     await connectRabbitMQ();
     await consumeDeliveryAssignedEvents();
 
+    // Start publishing pending outbox events
+    startOutboxPublisher();
     app.listen(PORT, () => {
       console.log(`Order Service running on port ${PORT}`);
     });
