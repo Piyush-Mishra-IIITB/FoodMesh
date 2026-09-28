@@ -18,7 +18,7 @@ const processPayment = async ({ order, customer, amount, paymentMethod }) => {
   });
 
   if (existingPayment) {
-    throw new Error("Payment already exists for this order");
+    return existingPayment;
   }
 
   const payment = await Payment.create({

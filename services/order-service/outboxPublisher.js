@@ -28,10 +28,16 @@ const publishPendingEvents = async () => {
       try {
         event.attempts += 1;
 
+        const eventMessage = {
+          eventId: event._id.toString(),
+          eventType: event.eventType,
+          ...event.payload,
+        };
+
         channel.publish(
           event.exchange,
           event.routingKey,
-          Buffer.from(JSON.stringify(event.payload)),
+          Buffer.from(JSON.stringify(eventMessage)),
           {
             persistent: true,
           },
