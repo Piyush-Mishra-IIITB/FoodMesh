@@ -10,7 +10,9 @@ let channel;
 
 const connectRabbitMQ = async () => {
   try {
-    connection = await amqp.connect("amqp://localhost:5672");
+    connection = await amqp.connect(
+      process.env.RABBITMQ_URL || "amqp://localhost:5672",
+    );
 
     connection.on("error", (error) => {
       console.error("RabbitMQ connection error:", error.message);

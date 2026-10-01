@@ -1,0 +1,197 @@
+services:
+  # =========================
+  # Infrastructure
+  # =========================
+
+  mongodb:
+    image: mongo:8
+    container_name: food-delivery-mongodb
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >
+          mongosh --quiet --eval
+          'try {
+            rs.status().ok
+          } catch (e) {
+            rs.initiate({
+              _id: "rs0",
+              members: [{ _id: 0, host: "mongodb:27017" }]
+            }).ok
+          }'
+      interval: 5s
+      timeout: 10s
+      retries: 15
+      start_period: 10s
+
+  redis:
+    image: redis:8-alpine
+    container_name: food-delivery-redis
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: food-delivery-rabbitmq
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # =========================
+  # User Service
+  # =========================
+
+  user-service:
+    image: food-delivery-user-service:latest
+    pull_policy: never
+    container_name: food-delivery-user-service
+
+    env_file:
+      - ./services/user-service/.env
+    environment:
+      MONGO_URI: mongodb://mongodb:27017/food_delivery
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  # =========================
+  # Restaurant Service
+  # =========================
+
+  restaurant-service:
+    image: food-delivery-restaurant-service:latest
+    pull_policy: never
+    container_name: food-delivery-restaurant-service
+    env_file:
+      - ./services/restaurant-service/.env
+    environment:
+      MONGO_URI: mongodb://mongodb:27017/food_delivery
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # =========================
+  # Order Service
+  # =========================
+
+  order-service:
+    image: food-delivery-order-service:latest
+    pull_policy: never
+    container_name: food-delivery-order-service
+    env_file:
+      - ./services/order-service/.env
+    environment:
+      MONGO_URI: mongodb://mongodb:27017/food_delivery?replicaSet=rs0
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      RESTAURANT_SERVICE_URL: http://restaurant-service:5002
+      DELIVERY_SERVICE_URL: http://delivery-service:5004
+      PAYMENT_SERVICE_URL: http://payment-service:5005
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # =========================
+  # Delivery Service
+  # =========================
+
+  delivery-service:
+    image: food-delivery-delivery-service:latest
+    pull_policy: never
+    container_name: food-delivery-delivery-service
+    env_file:
+      - ./services/delivery-service/.env
+    environment:
+      MONGO_URI: mongodb://mongodb:27017/food_delivery
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # =========================
+  # Payment Service
+  # =========================
+
+  payment-service:
+    image: food-delivery-payment-service:latest
+    pull_policy: never
+    container_name: food-delivery-payment-service
+    env_file:
+      - ./services/payment-service/.env
+    environment:
+      MONGO_URI: mongodb://mongodb:27017/food_delivery
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      RESTAURANT_SERVICE_URL: http://restaurant-service:5002
+      DELIVERY_SERVICE_URL: http://delivery-service:5004
+      ORDER_SERVICE_URL: http://order-service:5003
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # =========================
+  # API Gateway
+  # =========================
+
+  api-gateway:
+    image: food-delivery-api-gateway:latest
+    pull_policy: never
+    container_name: food-delivery-api-gateway
+    env_file:
+      - ./services/api-gateway/.env
+    environment:
+      USER_SERVICE_URL: http://user-service:5001
+      RESTAURANT_SERVICE_URL: http://restaurant-service:5002
+      ORDER_SERVICE_URL: http://order-service:5003
+      DELIVERY_SERVICE_URL: http://delivery-service:5004
+      PAYMENT_SERVICE_URL: http://payment-service:5005
+    ports:
+      - "5000:5000"
+    depends_on:
+      - user-service
+      - restaurant-service
+      - order-service
+      - delivery-service
+      - payment-service
+
+# =========================
+# Persistent Volumes
+# =========================
+
+volumes:
+  mongo-data:
+  redis-data:
+  rabbitmq-data:

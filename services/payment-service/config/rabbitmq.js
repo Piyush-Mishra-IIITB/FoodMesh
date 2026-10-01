@@ -13,7 +13,9 @@ const DLQ_QUEUE = "payment_dlq";
 
 const connectRabbitMQ = async () => {
   try {
-    const connection = await amqp.connect("amqp://localhost:5672");
+    const connection = await amqp.connect(
+      process.env.RABBITMQ_URL || "amqp://localhost:5672",
+    );
 
     channel = await connection.createChannel();
 
