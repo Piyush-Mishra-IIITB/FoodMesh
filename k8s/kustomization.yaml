@@ -1,0 +1,84 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: food-delivery
+
+resources:
+  - namespace.yaml
+
+  # Infrastructure
+  - infrastructure/mongodb/service.yaml
+  - infrastructure/mongodb/statefulset.yaml
+  - infrastructure/redis/service.yaml
+  - infrastructure/redis/statefulset.yaml
+  - infrastructure/rabbitmq/service.yaml
+  - infrastructure/rabbitmq/statefulset.yaml
+
+  # User Service
+  - services/user-service/deployment.yaml
+  - services/user-service/service.yaml
+
+  # Restaurant Service
+  - services/restaurant-service/deployment.yaml
+  - services/restaurant-service/service.yaml
+
+  # Order Service
+  - services/order-service/deployment.yaml
+  - services/order-service/service.yaml
+
+  # Delivery Service
+  - services/delivery-service/deployment.yaml
+  - services/delivery-service/service.yaml
+
+  # Payment Service
+  - services/payment-service/deployment.yaml
+  - services/payment-service/service.yaml
+
+  # API Gateway
+  - services/api-gateway/deployment.yaml
+  - services/api-gateway/service.yaml
+
+configMapGenerator:
+  - name: user-service-config
+    literals:
+      - PORT=5001
+      - MONGO_URI=mongodb://mongodb:27017/food_delivery
+
+  - name: restaurant-service-config
+    literals:
+      - PORT=5002
+      - MONGO_URI=mongodb://mongodb:27017/food_delivery
+      - REDIS_URL=redis://redis:6379
+
+  - name: order-service-config
+    literals:
+      - PORT=5003
+      - MONGO_URI=mongodb://mongodb:27017/food_delivery?replicaSet=rs0
+      - REDIS_URL=redis://redis:6379
+      - RESTAURANT_SERVICE_URL=http://restaurant-service:5002
+      - DELIVERY_SERVICE_URL=http://delivery-service:5004
+      - PAYMENT_SERVICE_URL=http://payment-service:5005
+
+  - name: delivery-service-config
+    literals:
+      - PORT=5004
+      - MONGO_URI=mongodb://mongodb:27017/food_delivery
+      - REDIS_URL=redis://redis:6379
+
+  - name: payment-service-config
+    literals:
+      - PORT=5005
+      - MONGO_URI=mongodb://mongodb:27017/food_delivery
+      - ORDER_SERVICE_URL=http://order-service:5003
+
+  - name: api-gateway-config
+    literals:
+      - PORT=5000
+      - USER_SERVICE_URL=http://user-service:5001
+      - RESTAURANT_SERVICE_URL=http://restaurant-service:5002
+      - ORDER_SERVICE_URL=http://order-service:5003
+      - DELIVERY_SERVICE_URL=http://delivery-service:5004
+      - PAYMENT_SERVICE_URL=http://payment-service:5005
+
+generatorOptions:
+  disableNameSuffixHash: true
