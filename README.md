@@ -1,4 +1,5 @@
 
+
 # Distributed Food Delivery Platform
 
 A backend-focused distributed food delivery system built with **Node.js, Express, MongoDB, Redis, RabbitMQ, Docker, and Kubernetes**. The application is divided into five independently runnable microservices and an API Gateway.
@@ -56,6 +57,7 @@ MongoDB provides persistent storage. Redis is used for caching and delivery-part
 - Dockerfiles and Docker Compose configuration for local containerized execution.
 - Kubernetes manifests organized with Kustomize for local Minikube deployment.
 - API Gateway request IDs and persistent logs for basic observability.
+- **k6 performance benchmark:** Tested `GET /api/restaurants` through the API Gateway with 1 virtual user for 60 seconds; recorded 60/60 successful responses, 4.68 ms average latency, and 5.98 ms p95 latency in a local, low-load benchmark.
 
 ---
 
@@ -590,6 +592,29 @@ Use the URL printed by Minikube as the API base URL.
 
 ---
 
+## Performance Benchmark
+
+FoodMesh includes a k6-based local benchmark for the API Gateway → Restaurant Service request path.
+
+| Metric | Result |
+|---|---:|
+| Endpoint | `GET /api/restaurants` |
+| Virtual users | 1 |
+| Duration | 60 seconds |
+| Total requests | 60 |
+| Successful responses | 60/60 (100%) |
+| Average latency | 4.68 ms |
+| P95 latency | 5.98 ms |
+| Observed throughput | 0.99 requests/second |
+
+These figures describe a **local, low-load benchmark**, not maximum system capacity or production performance. Results can vary with hardware, database state, caching, and background services. Higher-load tests triggered HTTP 429 responses from the API Gateway rate limiter.
+
+Run the test from the project root (with the stack running and k6 installed):
+
+```bash
+k6 run restaurants-test.js
+```
+
 ## Testing and Verification
 
 The project has been verified through a combination of manual API testing and focused automated tests during development.
@@ -677,4 +702,3 @@ The active distributed application is implemented under `services/` and exposed 
 B.Tech, IIIT Bhopal
 
 ---
-
